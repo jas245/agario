@@ -1,0 +1,63 @@
+<!-- index.html -->
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Jason's Agar</title>
+        <link rel="stylesheet" href="style.css" />
+    </head>
+    <body class="initial-load">
+        <div id="startMenu">
+            <h1>Jason's Agar</h1>
+            <!-- NEW: Skin Preview Image -->
+            <img
+                id="skinPreview"
+                class="skin-preview"
+                src=""
+                alt="Skin Preview"
+            />
+
+            <!-- NEW: Hidden File Input -->
+            <input
+                type="file"
+                id="skinInput"
+                accept="image/*"
+                style="display: none"
+            />
+
+            <!-- NEW: Upload Skin Button -->
+            <button id="uploadSkinButton">Upload Skin</button>
+            <input
+                type="text"
+                id="nicknameInput"
+                placeholder="Enter your name"
+            />
+            <button id="playButton">Play</button>
+        </div>
+
+        <canvas id="gameCanvas"></canvas>
+
+        <div id="chat-area">
+            <ul id="chat-messages"></ul>
+            <form id="chat-form">
+                <input
+                    id="chat-input"
+                    autocomplete="off"
+                    placeholder="Press enter to type..."
+                />
+            </form>
+        </div>
+
+        <div id="ui-toggles">
+            <button id="toggle-chat-btn">Hide Chat</button>
+            <button id="toggle-skins-btn">Skins On</button>
+        </div>
+
+        <!-- This line is essential for real-time communication! -->
+        <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+        <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+        <!-- Our game logic -->
+        <script src="script.js"></script>
+    </body>
+</html>

@@ -1,0 +1,20 @@
+{
+  "name": "jasons-agar",
+  "version": "1.0.0",
+  "description": "A multiplayer agar.io style game.",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "author": "Jason",
+  "license": "ISC",
+  "dependencies": {
+    "@socket.io/admin-ui": "^0.5.1",
+    "express": "^4.18.2",
+    "socket.io": "^4.7.2",
+    "socket.io-msgpack-parser": "^3.0.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
