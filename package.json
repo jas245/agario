@@ -1,20 +1,23 @@
 {
-  "name": "jasons-agar",
+  "name": "nodejs",
   "version": "1.0.0",
-  "description": "A multiplayer agar.io style game.",
+  "description": "",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js"
+    "test": "echo \"Error: no test specified\" && exit 1"
   },
-  "author": "Jason",
+  "keywords": [],
+  "author": "",
   "license": "ISC",
   "dependencies": {
     "@socket.io/admin-ui": "^0.5.1",
-    "express": "^4.18.2",
-    "socket.io": "^4.7.2",
+    "@socket.io/redis-adapter": "^8.3.0",
+    "@socket.io/redis-emitter": "^5.1.0",
+    "@socket.io/sticky": "^1.0.4",
+    "@types/node": "^22.13.11",
+    "express": "^5.1.0",
+    "msgpackr": "^1.11.5",
+    "socket.io": "^4.8.1",
     "socket.io-msgpack-parser": "^3.0.2"
-  },
-  "engines": {
-    "node": ">=18.0.0"
   }
 }

@@ -86,7 +86,7 @@ body.initial-load {
 }
 
 
-#nicknameInput {
+#nicknameInput, #skinUrlInput {
     display: block;
     width: 100%;
     padding: 10px;
@@ -102,6 +102,15 @@ body.initial-load {
 
 #playButton:hover {
     background-color: #45a049;
+}
+
+#spectateButton {
+    background-color: #e6a700; /* Dark yellow */
+    color: #000; /* Black text for better contrast */
+}
+
+#spectateButton:hover {
+    background-color: #c99200;
 }
 
 #chat-area {

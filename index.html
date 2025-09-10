@@ -8,6 +8,15 @@
         <link rel="stylesheet" href="style.css" />
     </head>
     <body class="initial-load">
+        <div
+            id="emote-preload-container"
+            style="
+                position: absolute;
+                left: -9999px;
+                top: -9999px;
+                visibility: hidden;
+            "
+        ></div>
         <div id="startMenu">
             <h1>Jason's Agar</h1>
             <!-- NEW: Skin Preview Image -->
@@ -30,10 +39,16 @@
             <button id="uploadSkinButton">Upload Skin</button>
             <input
                 type="text"
+                id="skinUrlInput"
+                placeholder="Or paste an image URL"
+            />
+            <input
+                type="text"
                 id="nicknameInput"
                 placeholder="Enter your name"
             />
             <button id="playButton">Play</button>
+            <button id="spectateButton">Spectate</button>
         </div>
 
         <canvas id="gameCanvas"></canvas>
@@ -57,6 +72,7 @@
         <!-- This line is essential for real-time communication! -->
         <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
         <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/lottie-web/5.13.0/lottie.min.js"></script>
         <!-- Our game logic -->
         <script src="script.js"></script>
     </body>

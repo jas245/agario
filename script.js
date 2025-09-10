@@ -6,6 +6,7 @@ const ctx = canvas.getContext("2d");
 const startMenu = document.getElementById("startMenu");
 const nicknameInput = document.getElementById("nicknameInput");
 const playButton = document.getElementById("playButton");
+const spectateButton = document.getElementById("spectateButton");
 
 const chatArea = document.getElementById("chat-area");
 const chatMessages = document.getElementById("chat-messages");
@@ -17,6 +18,7 @@ const toggleSkinsBtn = document.getElementById("toggle-skins-btn");
 const skinPreview = document.getElementById("skinPreview");
 const skinInput = document.getElementById("skinInput");
 const uploadSkinButton = document.getElementById("uploadSkinButton");
+const skinUrlInput = document.getElementById("skinUrlInput");
 
 // --- SERVER CONNECTION ---
 const SERVER_URL = window.location.origin;
@@ -30,13 +32,46 @@ let food = [];
 let ejectedMasses = [];
 let myPlayerId = null;
 let world = { width: 0, height: 0 };
+let isGameReadyToDraw = false;
 const INTERPOLATION_SPEED = 0.2;
 let ejectInterval = null;
 let skinsVisible = true;
 
 let playerSkins = {}; // Cache for loaded skin images { playerId: Image }
 let selectedSkinFile = null; // Holds the file selected by the user
-let lastUploadedSkinUrl = null;
+
+// NEW: Spectator mode state variables
+let isSpectating = false;
+let spectatedPlayerId = null;
+let spectatePlayerList = [];
+let spectateIndex = 0;
+let spectateUpdateInterval = null;
+
+// NEW: This object will store the camera's world-coordinate boundaries each frame.
+let viewport = { left: 0, right: 0, top: 0, bottom: 0 };
+// NEW: An extra margin to prevent objects from "popping" in at the very edge.
+const CULLING_MARGIN = 100; // in pixels
+let drawnEntitiesThisFrame = 0;
+let totalEntitiesInView = 0;
+let lastLogTime = 0;
+const LOG_INTERVAL = 1000; // Log to console every 1000ms (1 second)
+
+// NEW: Emote Configuration
+const EMOTE_SCALE_FACTOR = 1.3;
+const EMOTE_URLS = {
+    1: "https://fonts.gstatic.com/s/e/notoemoji/latest/1f600/lottie.json", // 😀
+    2: "https://fonts.gstatic.com/s/e/notoemoji/latest/1f602/lottie.json", // 😂
+    3: "https://fonts.gstatic.com/s/e/notoemoji/latest/1f621/lottie.json", // 😡
+    4: "https://fonts.gstatic.com/s/e/notoemoji/latest/1f634/lottie.json", // 😴
+    5: "https://fonts.gstatic.com/s/e/notoemoji/latest/1f4a9/lottie.json", // 💩
+    6: "https://fonts.gstatic.com/s/e/notoemoji/latest/1f44d/lottie.json", // 👍
+    7: "https://fonts.gstatic.com/s/e/notoemoji/latest/1f525/lottie.json", // 🔥
+    8: "https://fonts.gstatic.com/s/e/notoemoji/latest/1f480/lottie.json", // 💀
+    9: "https://fonts.gstatic.com/s/e/notoemoji/latest/1f92c/lottie.json", // 🤬
+};
+let emoteCooldown = false;
+const emoteRendererPool = {};
+let playerActiveEmotes = {};
 
 const virusImage = new Image();
 virusImage.src = "virus.png";
@@ -45,8 +80,8 @@ const dealership = new Image();
 dealership.src = "dealership.png";
 let showdealershipImage = true;
 const DEALERSHIP_IMAGE_CONFIG = {
-    x: 3986,
-    y: 3986,
+    x: 3976,
+    y: 3976,
     width: 1024,
     height: 1024,
 };
@@ -66,7 +101,7 @@ const ZOOM_SPEED = 0.07; // How fast the mouse wheel changes the zoom multiplier
 const ZOOM_SMOOTH_SPEED = 0.15; // How smoothly the camera interpolates to the target zoom.
 
 // --- TWEAK THESE VALUES ---
-const VIEW_SCALE = 2.0; // The base magnification. 2.0 means everything is 2x bigger by default.
+const VIEW_SCALE = 3; // The base magnification. 2.0 means everything is 2x bigger by default.
 const MAX_ZOOM_IN_MULTIPLIER = 2.0; // Max manual zoom IN (Total zoom = VIEW_SCALE * this value).
 const MIN_ZOOM_OUT_MULTIPLIER = 0.1; // An absolute limit on how far the game can zoom OUT.
 
@@ -103,6 +138,66 @@ window.addEventListener("resize", () => {
     mouseScreenPos = { x: window.innerWidth / 2, y: window.innerHeight / 2 };
 });
 
+function isObjectVisible(obj) {
+    const objRight = obj.x + obj.radius;
+    const objLeft = obj.x - obj.radius;
+    const objBottom = obj.y + obj.radius;
+    const objTop = obj.y - obj.radius;
+
+    // This checks for intersection. It's faster than checking if it's "inside".
+    // The object is NOT visible if it's completely to the left, right, top, or bottom.
+    if (
+        objRight < viewport.left ||
+        objLeft > viewport.right ||
+        objBottom < viewport.top ||
+        objTop > viewport.bottom
+    ) {
+        return false;
+    }
+    return true;
+}
+
+async function preloadEmotes() {
+    console.log("Starting emote pre-rendering...");
+    const masterContainer = document.getElementById("emote-preload-container");
+
+    for (const id in EMOTE_URLS) {
+        if (emoteRendererPool[id]) continue; // Skip if already pre-rendered
+
+        // Create a dedicated container for this specific emote
+        const emoteContainer = document.createElement("div");
+        emoteContainer.style.width = "512px";
+        emoteContainer.style.height = "512px";
+        masterContainer.appendChild(emoteContainer);
+
+        const anim = lottie.loadAnimation({
+            container: emoteContainer,
+            renderer: "canvas",
+            loop: true,
+            autoplay: false, // We will control playback manually
+            path: EMOTE_URLS[id],
+        });
+
+        // Use a promise to wait for the animation to be fully ready
+        await new Promise((resolve) => {
+            anim.addEventListener("DOMLoaded", () => {
+                const lottieCanvas = emoteContainer.querySelector("canvas");
+                // Store the fully prepared renderer object in our pool
+                emoteRendererPool[id] = {
+                    animation: anim,
+                    sourceCanvas: lottieCanvas,
+                };
+                anim.pause(); // Pause it immediately to save resources
+                console.log(
+                    `Successfully pre-rendered and pooled emote ${id}.`,
+                );
+                resolve();
+            });
+        });
+    }
+    console.log("Emote pre-rendering complete.");
+}
+
 function upload_image_promise(imgBlob) {
     return new Promise((resolve, reject) => {
         let cloud_url = "https://api.cloudinary.com/v1_1/dfrhv4fhm/upload";
@@ -126,6 +221,7 @@ function upload_image_promise(imgBlob) {
                         nickname: "System",
                         message: "Skin uploaded successfully!",
                     });
+                    skinUrlInput.value = res.data.url;
                     resolve(res.data.url);
                 } else {
                     reject("Upload failed: No URL returned.");
@@ -236,6 +332,7 @@ socket.on("gameSetup", (setup) => {
 socket.on("playerDied", () => {
     startMenu.style.display = "block";
     chatArea.classList.add("d-none");
+    isGameReadyToDraw = false;
     players = {};
     playerSkins = {};
     // *** MODIFIED: Reset zoom multiplier to 1.0 on death ***
@@ -259,29 +356,27 @@ function gameLoop() {
 }
 
 function updateAndApplyZoom() {
-    const myPlayer = players[myPlayerId];
-    // Start with a base multiplier of 1.0 (no change to VIEW_SCALE)
+    // Determine the correct player to base the zoom on
+    const targetPlayerId = isSpectating ? spectatedPlayerId : myPlayerId;
+    const targetPlayer = players[targetPlayerId];
+
     let dynamicMinZoomMultiplier = 1.0;
 
-    if (myPlayer && myPlayer.cells.length > 0) {
-        const totalMass = myPlayer.cells.reduce(
+    if (targetPlayer && targetPlayer.cells.length > 0) {
+        const totalMass = targetPlayer.cells.reduce(
             (sum, cell) => sum + cell.mass,
             0,
         );
-        const numCells = myPlayer.cells.length;
+        const numCells = targetPlayer.cells.length;
         const equivalentRadius = Math.sqrt(totalMass);
-
-        // --- THIS IS THE KEY FORMULA CHANGE ---
-        // We are increasing the multiplier from 0.04 to 0.08 to make the zoom-out
-        // effect much stronger as the player's size (equivalentRadius) increases.
-        const viewFactor = 1 + Math.sqrt(equivalentRadius) * 0.08; // <-- CHANGED from 0.04
-        // ----------------------------------------
-
+        const viewFactor = 1 + Math.sqrt(equivalentRadius) * 0.08;
         const splitBonusDiminisher = 1 / (1 + equivalentRadius * 0.005);
         const splitFactor = 1 + (numCells - 1) * 0.1 * splitBonusDiminisher;
-
-        // As the player gets bigger, the minimum zoom multiplier gets smaller (zooming out).
         dynamicMinZoomMultiplier = 1.0 / (viewFactor * splitFactor);
+    }
+
+    if (isSpectating) {
+        dynamicMinZoomMultiplier *= 0.6;
     }
 
     // Enforce the absolute minimum multiplier.
@@ -289,6 +384,22 @@ function updateAndApplyZoom() {
         dynamicMinZoomMultiplier,
         MIN_ZOOM_OUT_MULTIPLIER,
     );
+
+    // --- REVISED LOGIC START ---
+
+    // Condition 1: Was the player at the absolute max zoom-out on the previous frame?
+    // We use a small tolerance to account for floating point inaccuracies.
+    const wasAtMaxZoomOut = camera.targetZoom <= camera.lastMinZoom + 0.001;
+
+    // Condition 2: Is the new zoom limit even further out than the old one?
+    const newLimitIsFurther = dynamicMinZoomMultiplier < camera.lastMinZoom;
+
+    // Only if both conditions are true, we automatically adjust the target zoom.
+    if (wasAtMaxZoomOut && newLimitIsFurther) {
+        camera.targetZoom = dynamicMinZoomMultiplier;
+    }
+
+    // --- REVISED LOGIC END ---
 
     // This single line correctly clamps the target zoom multiplier.
     // It can't go below the dynamic minimum, and it can't go above the manual maximum.
@@ -300,20 +411,39 @@ function updateAndApplyZoom() {
     // Smoothly interpolate the actual zoom towards the (now correctly clamped) target.
     camera.zoom += (camera.targetZoom - camera.zoom) * ZOOM_SMOOTH_SPEED;
 
-    // Store the minimum for the next frame's comparison (this is no longer used but can be kept for debugging).
+    // Store this frame's minimum for the next frame's comparison.
     camera.lastMinZoom = dynamicMinZoomMultiplier;
 }
 
 function draw() {
+    drawnEntitiesThisFrame = 0;
+    totalEntitiesInView = 0;
+
+    if (!isGameReadyToDraw && !isSpectating) {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        return; // Stop the function here
+    }
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.save();
 
-    ctx.translate(canvas.width / 2, canvas.height / 2);
+    // --- MODIFICATION START ---
 
-    // *** MODIFIED: Calculate and apply the final scale ***
+    // Calculate the final scale for this frame
     const finalScale = VIEW_SCALE * camera.zoom;
-    ctx.scale(finalScale, finalScale);
 
+    // Update the global viewport object with the current visible boundaries
+    const viewWidth = canvas.width / finalScale;
+    const viewHeight = canvas.height / finalScale;
+
+    viewport.left = camera.x - viewWidth / 2 - CULLING_MARGIN;
+    viewport.right = camera.x + viewWidth / 2 + CULLING_MARGIN;
+    viewport.top = camera.y - viewHeight / 2 - CULLING_MARGIN;
+    viewport.bottom = camera.y + viewHeight / 2 + CULLING_MARGIN;
+
+    // --- MODIFICATION END ---
+
+    ctx.translate(canvas.width / 2, canvas.height / 2);
+    ctx.scale(finalScale, finalScale);
     ctx.translate(-camera.x, -camera.y);
 
     drawWorldBoundary();
@@ -322,11 +452,72 @@ function draw() {
     drawAllFood();
     //drawAllViruses();
     drawAllEjectedMass();
-    //drawAllPlayers();
+
     drawGameEntities();
 
     ctx.restore();
     drawUI();
+
+    /*
+    // NEW: Log the final counts periodically
+    const now = performance.now();
+    if (now - lastLogTime > LOG_INTERVAL) {
+        console.log(
+            `Rendering: ${drawnEntitiesThisFrame} / ${totalEntitiesInView} objects (Culled ${totalEntitiesInView - drawnEntitiesThisFrame})`,
+        );
+        lastLogTime = now;
+    }*/
+}
+
+function stopSpectating() {
+    isSpectating = false;
+    spectatedPlayerId = null;
+    if (spectateUpdateInterval) {
+        clearInterval(spectateUpdateInterval); // CRITICAL: Stop the interval
+        spectateUpdateInterval = null;
+    }
+    startMenu.style.display = "block";
+}
+
+// NEW: Function to update the spectator list
+function updateSpectateList() {
+    if (!isSpectating || Object.keys(players).length === 0) {
+        return;
+    }
+
+    // Get the ID of the player we are currently watching
+    const currentSpectatedId = spectatePlayerList[spectateIndex] || null;
+
+    // Create the new, up-to-date sorted list of player IDs
+    const newSortedList = Object.values(players)
+        .map((p) => ({
+            id: p.id,
+            totalMass: p.cells.reduce((sum, cell) => sum + cell.mass, 0),
+        }))
+        .filter((p) => p.totalMass > 0)
+        .sort((a, b) => b.totalMass - a.totalMass)
+        .map((p) => p.id);
+
+    if (newSortedList.length === 0) {
+        stopSpectating(); // If no players are left, exit spectator mode
+        return;
+    }
+
+    spectatePlayerList = newSortedList;
+
+    // Find the new index of the player we were watching
+    const newIndex = spectatePlayerList.indexOf(currentSpectatedId);
+
+    if (newIndex !== -1) {
+        // The player is still in the list, update our index to their new position
+        spectateIndex = newIndex;
+    } else {
+        // The player we were watching is gone, or we weren't watching anyone.
+        // Default to watching the new leader.
+        spectateIndex = 0;
+    }
+    // Finally, update the spectatedPlayerId for the camera to follow
+    spectatedPlayerId = spectatePlayerList[spectateIndex];
 }
 
 // --- PLAYER INPUT ---
@@ -337,28 +528,26 @@ playButton.addEventListener("click", async () => {
         playButton.disabled = true; // Prevent double-clicking
         playButton.textContent = "Joining...";
 
-        let skinUrl = null;
-        if (selectedSkinFile) {
-            // If we have a stored URL and the file hasn't changed, reuse it.
-            if (lastUploadedSkinUrl) {
-                console.log("Reusing previously uploaded skin URL.");
-                skinUrl = lastUploadedSkinUrl;
-            } else {
-                // Otherwise, upload the new file.
-                try {
-                    skinUrl = await upload_image_promise(selectedSkinFile);
-                    // Store the new URL for next time.
-                    lastUploadedSkinUrl = skinUrl;
-                } catch (error) {
-                    console.error(
-                        "Could not upload skin, proceeding without it.",
-                        error,
-                    );
-                    lastUploadedSkinUrl = null; // Ensure we don't store a failed attempt
-                }
+        let skinUrl = skinUrlInput.value.trim();
+        if (!skinUrl && selectedSkinFile) {
+            try {
+                // upload_image_promise will now populate the input field for us
+                skinUrl = await upload_image_promise(selectedSkinFile);
+            } catch (error) {
+                console.error(
+                    "Could not upload skin, proceeding without it.",
+                    error,
+                );
+                skinUrl = null; // Ensure we proceed without a skin on failure
             }
         }
+
+        if (skinUrl === "") {
+            skinUrl = null;
+        }
+
         startMenu.style.display = "none";
+        preloadEmotes();
         // *** MODIFIED: Reset zoom multiplier to 1.0 on game start ***
         camera.zoom = 1.0;
         camera.targetZoom = 1.0;
@@ -392,7 +581,7 @@ playButton.addEventListener("click", async () => {
         });
 
         setInterval(() => {
-            if (players[myPlayerId]) {
+            if (!isSpectating && players[myPlayerId]) {
                 const screenCenterX = canvas.width / 2;
                 const screenCenterY = canvas.height / 2;
                 const dx = mouseScreenPos.x - screenCenterX;
@@ -409,6 +598,52 @@ playButton.addEventListener("click", async () => {
             }
         }, 50);
     }
+});
+
+// NEW: Spectate button listener
+spectateButton.addEventListener("click", () => {
+    isSpectating = true;
+
+    // Perform an initial update to populate the list immediately
+    updateSpectateList();
+
+    // If there are no players after the initial update, don't start spectating
+    if (spectatePlayerList.length === 0) {
+        alert("No players to spectate!");
+        isSpectating = false;
+        return;
+    }
+
+    // Start the interval to keep the list updated every second
+    spectateUpdateInterval = setInterval(updateSpectateList, 1000);
+
+    // --- (Camera snapping logic) ---
+    const initialSpectatedPlayer = players[spectatedPlayerId];
+    if (initialSpectatedPlayer && initialSpectatedPlayer.cells.length > 0) {
+        let totalMass = 0;
+        let weightedX = 0;
+        let weightedY = 0;
+        for (const cell of initialSpectatedPlayer.cells) {
+            totalMass += cell.mass;
+            weightedX += cell.x * cell.mass;
+            weightedY += cell.y * cell.mass;
+        }
+        if (totalMass > 0) {
+            camera.x = weightedX / totalMass;
+            camera.y = weightedY / totalMass;
+        }
+    }
+
+    // Hide menu and start the game loop
+    document.body.classList.remove("initial-load");
+    startMenu.style.display = "none";
+    chatArea.style.display = "none";
+    chatArea.classList.add("d-none");
+    preloadEmotes();
+    camera.zoom = 1.0;
+    camera.targetZoom = 1.0;
+    camera.lastMinZoom = 1.0;
+    requestAnimationFrame(gameLoop);
 });
 
 chatForm.addEventListener("submit", (event) => {
@@ -457,12 +692,13 @@ socket.on("gameState", (encodedState) => {
     // 3. Decode players and merge with existing data for interpolation
     const serverPlayers = {};
     for (const pData of encodedPlayers) {
-        const [id, nickname, color, cellsData, skinUrl] = pData;
+        const [id, nickname, color, cellsData, skinUrl, emote] = pData;
         serverPlayers[id] = {
             id: id,
             nickname: nickname,
             color: color,
             skinUrl: skinUrl,
+            emote: emote,
             cells: cellsData.map((cData) => {
                 const mass = cData[3];
                 return {
@@ -494,6 +730,15 @@ socket.on("gameState", (encodedState) => {
         const serverPlayer = serverPlayers[id];
         if (!players[id]) {
             // New player
+            if (id === myPlayerId && serverPlayer.cells.length > 0) {
+                const myStartCell = serverPlayer.cells[0];
+                camera.x = myStartCell.x;
+                camera.y = myStartCell.y;
+                isGameReadyToDraw = true;
+                console.log(
+                    `Camera snapped to initial position: (${camera.x}, ${camera.y})`,
+                );
+            }
             players[id] = serverPlayer;
             // Initialize serverX/Y for interpolation
             players[id].cells.forEach((cell) => {
@@ -503,9 +748,39 @@ socket.on("gameState", (encodedState) => {
         } else {
             // Existing player
             const localPlayer = players[id];
+            // --- NEW: EMOTE MANAGEMENT LOGIC ---
+            const serverEmote = serverPlayer.emote;
+            const localEmote = localPlayer.emote;
+
+            // If an emote has just started
+            if (serverEmote && !localEmote) {
+                const emoteId = serverEmote.emoteId;
+                // Check if the emote is available in our pool
+                if (emoteRendererPool[emoteId]) {
+                    // Assign the pre-rendered object to the active player
+                    playerActiveEmotes[id] = emoteRendererPool[emoteId];
+                    // Start the animation from the beginning
+                    playerActiveEmotes[id].animation.goToAndPlay(0, true);
+                }
+            }
+            // If an emote has ended
+            else if (!serverEmote && localEmote) {
+                if (playerActiveEmotes[id]) {
+                    // Pause the animation and remove it from the active list
+                    playerActiveEmotes[id].animation.pause();
+                    delete playerActiveEmotes[id];
+                }
+            }
+
+            // This logic no longer needs to create/destroy anything.
+            // Just update the player's state.
+            localPlayer.emote = serverPlayer.emote;
+            // --- END EMOTE MANAGEMENT ---
+
             localPlayer.nickname = serverPlayer.nickname;
-            localPlayer.color = serverPlayer.color; // Keep color updated
+            localPlayer.color = serverPlayer.color;
             localPlayer.skinUrl = serverPlayer.skinUrl;
+            localPlayer.emote = serverPlayer.emote;
 
             const serverCellIds = new Set(serverPlayer.cells.map((c) => c.id));
 
@@ -580,6 +855,11 @@ socket.on("gameState", (encodedState) => {
     // Remove disconnected players
     for (const id in players) {
         if (!serverPlayerIds.has(id)) {
+            // MODIFIED: Clean up emote renderer AND container on disconnect
+            if (playerActiveEmotes[id]) {
+                playerActiveEmotes[id].animation.pause();
+                delete playerActiveEmotes[id];
+            }
             delete players[id];
             delete playerSkins[id];
         }
@@ -598,7 +878,8 @@ function updatePositions() {
     }
 }
 function updateCamera() {
-    const myPlayer = players[myPlayerId];
+    const targetPlayerId = isSpectating ? spectatedPlayerId : myPlayerId;
+    const myPlayer = players[targetPlayerId];
     if (myPlayer && myPlayer.cells.length > 0) {
         let totalMass = 0;
         let weightedX = 0;
@@ -617,6 +898,32 @@ function updateCamera() {
     }
 }
 function drawUI() {
+    // NEW: If spectating, show a different UI element
+    if (isSpectating) {
+        const spectatedPlayer = players[spectatedPlayerId];
+        if (spectatedPlayer) {
+            ctx.fillStyle = "#000000";
+            ctx.font = "20px Arial";
+            ctx.textAlign = "left";
+            ctx.fillText(`Spectating: ${spectatedPlayer.nickname}`, 10, 30);
+            ctx.fillText(`Press 'Q' to cycle, 'Esc' to exit.`, 10, 55);
+        }
+        // Always draw leaderboard and minimap when spectating
+        const sortedPlayers = Object.values(players)
+            .map((p) => ({
+                id: p.id,
+                nickname: p.nickname,
+                totalMass: p.cells.reduce((sum, cell) => sum + cell.mass, 0),
+            }))
+            .filter((p) => p.totalMass > 0)
+            .sort((a, b) => b.totalMass - a.totalMass);
+        drawLeaderboard(sortedPlayers);
+        if (MINIMAP_ENABLED) {
+            drawMinimap();
+        }
+        return; // End here to not draw player-specific stats
+    }
+
     const myPlayer = players[myPlayerId];
     if (!myPlayer || myPlayer.cells.length === 0) return;
     const myTotalMass = myPlayer.cells.reduce(
@@ -699,9 +1006,11 @@ function getCurrentGridSector() {
 }
 
 function drawMinimap() {
-    const myPlayer = players[myPlayerId];
-    // Don't draw if we don't have a player or world data yet
-    if (!myPlayer || myPlayer.cells.length === 0 || world.width === 0) {
+    const targetPlayerId = isSpectating ? spectatedPlayerId : myPlayerId;
+    const targetPlayer = players[targetPlayerId];
+
+    // Don't draw if we don't have a valid player or world data yet
+    if (!targetPlayer || targetPlayer.cells.length === 0 || world.width === 0) {
         return;
     }
 
@@ -757,8 +1066,8 @@ function drawMinimap() {
     }
 
     // --- 5. DRAW PLAYER'S CELLS ON THE MINIMAP ---
-    ctx.fillStyle = myPlayer.color;
-    for (const cell of myPlayer.cells) {
+    ctx.fillStyle = targetPlayer.color;
+    for (const cell of targetPlayer.cells) {
         // Convert world coordinates to minimap coordinates
         const minimapCellX = mapX + (cell.x / world.width) * MINIMAP_SIZE;
         const minimapCellY = mapY + (cell.y / world.height) * MINIMAP_SIZE;
@@ -852,32 +1161,22 @@ function drawWorldBoundary() {
     ctx.strokeRect(0, 0, world.width, world.height);
 }
 function drawAllFood() {
+    totalEntitiesInView += food.length;
     for (const f of food) {
+        if (!isObjectVisible(f)) continue;
+        drawnEntitiesThisFrame++;
         drawCircle(f.x, f.y, f.radius, f.color);
     }
 }
 function drawAllEjectedMass() {
+    totalEntitiesInView += ejectedMasses.length;
     for (const pellet of ejectedMasses) {
+        if (!isObjectVisible(pellet)) continue;
+        drawnEntitiesThisFrame++;
         drawCircle(pellet.x, pellet.y, pellet.radius, pellet.color);
     }
 }
-function drawAllPlayers() {
-    const allCells = [];
-    for (const id in players) {
-        for (const cell of players[id].cells) {
-            allCells.push({
-                ...cell,
-                color: players[id].color,
-                nickname: players[id].nickname,
-            });
-        }
-    }
-    allCells.sort((a, b) => a.mass - b.mass);
-    for (const cell of allCells) {
-        drawCircle(cell.x, cell.y, cell.radius, cell.color);
-        drawPlayerName(cell.x, cell.y, cell.nickname, cell.radius);
-    }
-}
+
 function drawCircle(x, y, radius, color) {
     ctx.beginPath();
     ctx.arc(x, y, radius, 0, Math.PI * 2);
@@ -897,17 +1196,52 @@ function drawPlayerName(x, y, name, radius) {
     ctx.fillText(name, x, y);
 }
 
-function drawCell(cell, color, skinImage) {
+function drawCell(cell, color, skinImage, ownerId) {
     const x = cell.x;
     const y = cell.y;
     const radius = cell.radius;
 
+    const player = players[ownerId];
+    const activeEmote = playerActiveEmotes[ownerId];
+
+    // --- MODIFIED: Emote Drawing Logic ---
+    // Check if an emote should be playing on this specific cell
+    if (
+        player &&
+        player.emote &&
+        player.emote.largestCellId === cell.id &&
+        activeEmote
+    ) {
+        // We no longer need a loading state because the emote is always ready
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(x, y, radius, 0, Math.PI * 2);
+        ctx.clip();
+
+        const emoteSize = radius * 2 * EMOTE_SCALE_FACTOR;
+        const emoteX = x - emoteSize / 2;
+        const emoteY = y - emoteSize / 2;
+
+        ctx.drawImage(
+            activeEmote.sourceCanvas,
+            emoteX,
+            emoteY,
+            emoteSize,
+            emoteSize,
+        );
+
+        ctx.restore();
+        return; // Stop here to not draw the regular skin/color
+    }
+    // --- END: Emote Drawing Logic ---
+
     // Draw the border first
+    /*
     const borderWidth = Math.max(2, radius * 0.05);
     ctx.beginPath();
     ctx.arc(x, y, radius + borderWidth, 0, Math.PI * 2);
     ctx.fillStyle = color;
-    ctx.fill();
+    ctx.fill();*/
 
     // Check if a skin should be drawn
     const canDrawSkin =
@@ -1008,14 +1342,29 @@ function drawGameEntities() {
     // 2. Sort the combined list by mass in ascending order.
     // This is the key step: smaller objects will be drawn first (in the background).
     entities.sort((a, b) => a.mass - b.mass);
+    totalEntitiesInView += entities.length;
 
     // 3. Loop through the sorted list and draw each entity based on its type
     for (const entity of entities) {
+        if (!isObjectVisible(entity)) continue;
+        drawnEntitiesThisFrame++;
         if (entity.type === "playerCell") {
             //drawCircle(entity.x, entity.y, entity.radius, entity.color);
             const skinImage = playerSkins[entity.ownerId];
-            drawCell(entity, entity.color, skinImage); // Use the new drawing function
-            drawPlayerName(entity.x, entity.y, entity.nickname, entity.radius);
+            drawCell(entity, entity.color, skinImage, entity.ownerId);
+            const player = players[entity.ownerId];
+
+            if (
+                player &&
+                (!player.emote || player.emote.largestCellId !== entity.id)
+            ) {
+                drawPlayerName(
+                    entity.x,
+                    entity.y,
+                    entity.nickname,
+                    entity.radius,
+                );
+            }
         } else if (entity.type === "virus") {
             drawVirus(entity.x, entity.y, entity.radius);
         }
@@ -1053,14 +1402,48 @@ canvas.addEventListener("dblclick", (event) => {
 });
 
 window.addEventListener("keydown", (event) => {
+    // NEW: Handle spectating controls first
+    if (isSpectating) {
+        if (event.key.toLowerCase() === "q") {
+            if (spectatePlayerList.length > 0) {
+                // Cycle to the next player in the (always current) list
+                spectateIndex = (spectateIndex + 1) % spectatePlayerList.length;
+                spectatedPlayerId = spectatePlayerList[spectateIndex];
+                console.log(
+                    spectatePlayerList.length + " " + spectatedPlayerId,
+                );
+            }
+        } else if (event.key === "Escape") {
+            // Use our new cleanup function
+            stopSpectating();
+        }
+        return; // Prevent any other key actions while spectating
+    }
     if (event.key === "Enter" && document.activeElement !== chatInput) {
-        event.preventDefault(); // Prevents any default browser action for the 'Enter' key
-        chatInput.focus(); // Programmatically focus the chat input field
-        return; // Stop further execution of this listener for this key press
+        event.preventDefault();
+        chatInput.focus();
+        return;
     }
     if (document.activeElement === chatInput) {
         return;
     }
+    // --- NEW: Emote Key Handling ---
+    const keyNum = parseInt(event.key);
+    if (!isNaN(keyNum) && keyNum >= 1 && keyNum <= 9) {
+        event.preventDefault();
+        if (!emoteCooldown) {
+            socket.emit("playEmote", { emoteId: keyNum });
+            // Set client-side cooldown to prevent spamming server
+            console.log("emoite");
+            emoteCooldown = true;
+            setTimeout(() => {
+                emoteCooldown = false;
+            }, 5000);
+        }
+        return; // Don't process other keys if it was an emote key
+    }
+    // --- END: Emote Key Handling ---
+
     if (startMenu.style.display === "block") return;
     if (event.key.toLowerCase() === "w" && !event.repeat) {
         socket.emit("ejectMass");
@@ -1094,6 +1477,8 @@ skinInput.addEventListener("change", (event) => {
         selectedSkinFile = file; // Store the file for later upload
         skinPreview.src = URL.createObjectURL(file); // Create a temporary URL for preview
         skinPreview.style.display = "block"; // Show the preview
-        lastUploadedSkinUrl = null;
+        skinUrlInput.value = ""; // Clear the URL input to prioritize the file upload
     }
 });
+
+preloadEmotes();

@@ -63,15 +63,15 @@ function reportPerformance() {
 const CONFIG = {
     PORT: process.env.PORT || 3000,
     SERVER_TICK_RATE: 60,
-    WORLD_WIDTH: 5000,
-    WORLD_HEIGHT: 5000,
+    WORLD_WIDTH: 5000, //CHANGE 5000
+    WORLD_HEIGHT: 5000, //CHANGE 5000
     MAX_CELL_MASS: 40000,
-    FOOD_COUNT: 200,
-    PLAYER_START_MASS: 400,
+    FOOD_COUNT: 1000, //CHANGE 1000
+    PLAYER_START_MASS: 400, //CHANGE 400
     PLAYER_BASE_SPEED: 5,
     PLAYER_SPEED_DECAY_RATE: 0.5,
     FOOD_RADIUS: 5,
-    FOOD_MASS: 1,
+    FOOD_MASS: 50, //CHANGE 20
     FOOD_RESPAWN_RATE: 1000,
     EJECTED_MASS_AMOUNT: 20,
     MIN_MASS_TO_EJECT: 200,
@@ -89,14 +89,14 @@ const CONFIG = {
     EAT_MASS_DIFFERENCE: 1.15,
     COLLISION_ITERATIONS: 3,
     GRID_CELL_SIZE: 200,
-    VIRUS_COUNT: 10,
+    VIRUS_COUNT: 10, //CHANGE 20
     VIRUS_MASS: 400,
     VIRUS_MIN_SPAWN_DISTANCE: 100,
     VIRUS_MAX_MASS: 600,
     VIRUS_SPLIT_SPEED: 20,
     VIRUS_SPLIT_DECELERATION: 0.85,
     VIRUS_BOUNCINESS: 0.7,
-    VIRUS_EXPLOSION_MAIN_CELL_MASS_RATIO: 0.65,
+    VIRUS_EXPLOSION_MAIN_CELL_MASS_RATIO: 0.4,
     VIRUS_EXPLOSION_SPLIT_SPEED: 15,
     DECAY_START_MASS: 1000,
     DECAY_RATE: 0.001,
@@ -137,7 +137,6 @@ function spawnInitialFood() {
 
 // *** MODIFICATION 1: Update encodeGameState to send skin URL ***
 function encodeGameState(players, food, ejectedMasses, viruses) {
-    // Encode players into: [id, nickname, color, [[cell_id, x, y, mass], ...], skinUrl]
     const encodedPlayers = Object.values(players).map((p) => {
         const encodedCells = p.cells.map((c) => [
             c.id,
@@ -145,7 +144,8 @@ function encodeGameState(players, food, ejectedMasses, viruses) {
             Math.round(c.y),
             Math.round(c.mass),
         ]);
-        return [p.id, p.nickname, p.color, encodedCells, p.skinUrl]; // <-- ADDED skinUrl
+        return [p.id, p.nickname, p.color, encodedCells, p.skinUrl, p.emote];
+        skinUrl;
     });
 
     // Encode food into: [[x, y, color], ...]
@@ -301,15 +301,21 @@ function enforceCellMassLimits() {
 }
 
 function applyMassDecay() {
-    //const massRetentionRatio = 1 - CONFIG.DECAY_RATE;
+    const MAX_DECAY_RATE = 0.05;
+
     for (const id in players) {
         const player = players[id];
         for (const cell of player.cells) {
             if (cell.mass > CONFIG.DECAY_START_MASS) {
-                const currentDecayRate =
+                let currentDecayRate =
                     CONFIG.DECAY_RATE + cell.mass * CONFIG.DECAY_MASS_FACTOR;
+
+                // Optional: Cap the decay rate
+                currentDecayRate = Math.min(currentDecayRate, MAX_DECAY_RATE);
+
                 const massRetentionRatio = 1 - currentDecayRate;
                 cell.mass *= massRetentionRatio;
+
                 if (cell.mass < CONFIG.DECAY_START_MASS) {
                     cell.mass = CONFIG.DECAY_START_MASS;
                 }
@@ -348,8 +354,6 @@ function gameLoop() {
     }
 }
 
-// ... (All other functions like updateCellPositions, handleIntraPlayerCollisions, etc., remain unchanged) ...
-
 // *** All functions from updateCellPositions to getSafeSpawnPosition are unchanged. For brevity, I'm omitting them, but they should be present in your file. ***
 function updateCellPositions() {
     for (const id in players) {
@@ -379,14 +383,8 @@ function updateCellPositions() {
                 cell.vy = 0;
             }
 
-            cell.x = Math.max(
-                cell.radius,
-                Math.min(CONFIG.WORLD_WIDTH - cell.radius, cell.x),
-            );
-            cell.y = Math.max(
-                cell.radius,
-                Math.min(CONFIG.WORLD_HEIGHT - cell.radius, cell.y),
-            );
+            cell.x = Math.max(0, Math.min(CONFIG.WORLD_WIDTH, cell.x));
+            cell.y = Math.max(0, Math.min(CONFIG.WORLD_HEIGHT, cell.y));
 
             if (cell.mergeTime > 0) {
                 cell.mergeTime -= 1000 / CONFIG.SERVER_TICK_RATE;
@@ -400,56 +398,58 @@ function handleIntraPlayerCollisions() {
         const player = players[id];
         if (player.cells.length <= 1) continue;
 
-        for (let i = 0; i < CONFIG.COLLISION_ITERATIONS; i++) {
-            for (let j = 0; j < player.cells.length; j++) {
-                for (let k = j + 1; k < player.cells.length; k++) {
-                    const cellA = player.cells[j];
-                    const cellB = player.cells[k];
-                    if (cellA.mergeTime > 0 || cellB.mergeTime > 0) {
-                        const dx = cellB.x - cellA.x;
-                        const dy = cellB.y - cellA.y;
-                        const distance = Math.sqrt(dx * dx + dy * dy);
-                        const sumOfRadii = cellA.radius + cellB.radius;
-                        if (distance < sumOfRadii && distance > 0) {
-                            const overlap = sumOfRadii - distance;
-                            const pushX = (dx / distance) * overlap;
-                            const pushY = (dy / distance) * overlap;
-                            const totalMass = cellA.mass + cellB.mass;
-                            const pushFactorA = cellB.mass / totalMass;
-                            const pushFactorB = cellA.mass / totalMass;
-                            cellA.x -= pushX * pushFactorA;
-                            cellA.y -= pushY * pushFactorA;
-                            cellB.x += pushX * pushFactorB;
-                            cellB.y += pushY * pushFactorB;
-                            cellA.x = Math.max(
-                                cellA.radius,
-                                Math.min(
-                                    CONFIG.WORLD_WIDTH - cellA.radius,
-                                    cellA.x,
-                                ),
-                            );
-                            cellA.y = Math.max(
-                                cellA.radius,
-                                Math.min(
-                                    CONFIG.WORLD_HEIGHT - cellA.radius,
-                                    cellA.y,
-                                ),
-                            );
-                            cellB.x = Math.max(
-                                cellB.radius,
-                                Math.min(
-                                    CONFIG.WORLD_WIDTH - cellB.radius,
-                                    cellB.x,
-                                ),
-                            );
-                            cellB.y = Math.max(
-                                cellB.radius,
-                                Math.min(
-                                    CONFIG.WORLD_HEIGHT - cellB.radius,
-                                    cellB.y,
-                                ),
-                            );
-                        }
+        for (let i = 0; i < player.cells.length; i++) {
+            for (let j = i + 1; j < player.cells.length; j++) {
+                const cellA = player.cells[i];
+                const cellB = player.cells[j];
+
+                // Only apply collision physics to cells that cannot merge yet.
+                if (cellA.mergeTime > 0 || cellB.mergeTime > 0) {
+                    const dx = cellB.x - cellA.x;
+                    const dy = cellB.y - cellA.y;
+                    const distSq = dx * dx + dy * dy;
+
+                    const sumOfRadii = cellA.radius + cellB.radius;
+                    const sumOfRadiiSq = sumOfRadii * sumOfRadii;
+
+                    // Check for collision using squared distances to avoid expensive sqrt operations on every check.
+                    if (distSq < sumOfRadiiSq && distSq > 0) {
+                        // A collision has been detected. Now we calculate the exact distance to resolve the overlap.
+                        const distance = Math.sqrt(distSq);
+
+                        // The amount of overlap that needs to be corrected.
+                        const overlap = (sumOfRadii - distance) / 2;
+
+                        // The normalized direction vector from A to B. This is the axis of collision.
+                        // We divide by distance to get a "unit vector" of length 1.
+                        const nx = dx / distance;
+                        const ny = dy / distance;
+
+                        // Move cellA backwards along the collision axis.
+                        cellA.x -= nx * overlap;
+                        cellA.y -= ny * overlap;
+
+                        // Move cellB forwards along the collision axis.
+                        cellB.x += nx * overlap;
+                        cellB.y += ny * overlap;
+
+                        // Preserve the boundary checks from the original function.
+                        cellA.x = Math.max(
+                            0,
+                            Math.min(CONFIG.WORLD_WIDTH, cellA.x),
+                        );
+                        cellA.y = Math.max(
+                            0,
+                            Math.min(CONFIG.WORLD_HEIGHT, cellA.y),
+                        );
+                        cellB.x = Math.max(
+                            0,
+                            Math.min(CONFIG.WORLD_WIDTH, cellB.x),
+                        );
+                        cellB.y = Math.max(
+                            0,
+                            Math.min(CONFIG.WORLD_HEIGHT, cellB.y),
+                        );
                     }
                 }
             }
@@ -714,61 +714,98 @@ function handleEating() {
 
                             // EXPLOSION LOGIC: Only explode if not at max cells
                             if (player.cells.length < CONFIG.MAX_CELLS) {
-                                const numNewCells =
-                                    CONFIG.MAX_CELLS - player.cells.length;
+                                // --- MODIFICATION START ---
+
+                                // 1. Define the minimum mass for a newly created cell.
+                                const MIN_EXPLOSION_CELL_MASS = 100;
+
+                                // 2. Calculate the total mass available to be split into new cells.
                                 const massToDistribute =
                                     cell.mass *
                                     (1 -
                                         CONFIG.VIRUS_EXPLOSION_MAIN_CELL_MASS_RATIO);
 
-                                cell.mass *=
-                                    CONFIG.VIRUS_EXPLOSION_MAIN_CELL_MASS_RATIO;
+                                // 3. Determine the maximum number of new cells possible based on TWO constraints.
+                                const maxCellsByMass = Math.floor(
+                                    massToDistribute / MIN_EXPLOSION_CELL_MASS,
+                                );
+                                const maxCellsByLimit =
+                                    CONFIG.MAX_CELLS - player.cells.length;
 
-                                const newCells = [];
-                                let totalWeight = 0;
-                                const randomWeights = [];
+                                // The final number of new cells is the SMALLER of the two constraints.
+                                const numNewCells = Math.min(
+                                    maxCellsByMass,
+                                    maxCellsByLimit,
+                                );
 
-                                // Generate random mass proportions for the new cells
-                                for (let i = 0; i < numNewCells; i++) {
-                                    const weight = Math.random();
-                                    randomWeights.push(weight);
-                                    totalWeight += weight;
+                                // Only proceed with the split if we can create at least one new cell.
+                                if (numNewCells > 0) {
+                                    // The original cell keeps its share of the mass.
+                                    cell.mass *=
+                                        CONFIG.VIRUS_EXPLOSION_MAIN_CELL_MASS_RATIO;
+
+                                    // 1. Calculate the mass that is guaranteed for the new cells.
+                                    const guaranteedMass =
+                                        numNewCells * MIN_EXPLOSION_CELL_MASS;
+
+                                    // 2. Calculate the "leftover" mass that will be distributed randomly.
+                                    const randomMassPool =
+                                        massToDistribute - guaranteedMass;
+
+                                    // 3. Generate random weights to distribute the leftover mass.
+                                    const newCells = [];
+                                    const randomWeights = [];
+                                    let totalWeight = 0;
+                                    for (let i = 0; i < numNewCells; i++) {
+                                        // Adding 1 ensures no weight is zero, preventing division by zero issues
+                                        // and making the distribution feel more substantial.
+                                        const weight = Math.random() + 1;
+                                        randomWeights.push(weight);
+                                        totalWeight += weight;
+                                    }
+
+                                    // 4. Create the new cells.
+                                    for (let i = 0; i < numNewCells; i++) {
+                                        // Each cell gets its base minimum mass PLUS its share of the random pool.
+                                        const extraMass =
+                                            (randomWeights[i] / totalWeight) *
+                                            randomMassPool;
+                                        const newMass =
+                                            MIN_EXPLOSION_CELL_MASS + extraMass;
+
+                                        const angle =
+                                            Math.random() * Math.PI * 2;
+
+                                        const newCell = {
+                                            id: player.nextCellId++,
+                                            x: cell.x,
+                                            y: cell.y,
+                                            mass: newMass,
+                                            radius: Math.sqrt(newMass),
+                                            vx:
+                                                Math.cos(angle) *
+                                                CONFIG.VIRUS_EXPLOSION_SPLIT_SPEED,
+                                            vy:
+                                                Math.sin(angle) *
+                                                CONFIG.VIRUS_EXPLOSION_SPLIT_SPEED,
+                                            mergeTime:
+                                                CONFIG.MERGE_TIME_BASE +
+                                                cell.mass *
+                                                    CONFIG.MERGE_TIME_PER_MASS,
+                                        };
+                                        newCells.push(newCell);
+                                    }
+
+                                    // --- MODIFICATION END ---
+
+                                    cell.mergeTime =
+                                        CONFIG.MERGE_TIME_BASE +
+                                        cell.mass * CONFIG.MERGE_TIME_PER_MASS;
+
+                                    player.cells.push(...newCells);
                                 }
-
-                                // Create the new cells
-                                for (let i = 0; i < numNewCells; i++) {
-                                    const newMass =
-                                        (randomWeights[i] / totalWeight) *
-                                        massToDistribute;
-                                    const angle = Math.random() * Math.PI * 2; // Random direction
-
-                                    const newCell = {
-                                        id: player.nextCellId++,
-                                        x: cell.x,
-                                        y: cell.y,
-                                        mass: newMass,
-                                        radius: Math.sqrt(newMass),
-                                        vx:
-                                            Math.cos(angle) *
-                                            CONFIG.VIRUS_EXPLOSION_SPLIT_SPEED,
-                                        vy:
-                                            Math.sin(angle) *
-                                            CONFIG.VIRUS_EXPLOSION_SPLIT_SPEED,
-                                        mergeTime:
-                                            CONFIG.MERGE_TIME_BASE +
-                                            cell.mass *
-                                                CONFIG.MERGE_TIME_PER_MASS,
-                                    };
-                                    newCells.push(newCell);
-                                }
-
-                                // Set merge cooldown on the original cell that exploded
-                                cell.mergeTime =
-                                    CONFIG.MERGE_TIME_BASE +
-                                    cell.mass * CONFIG.MERGE_TIME_PER_MASS;
-
-                                // Add all new cells to the player
-                                player.cells.push(...newCells);
+                                // If numNewCells is 0, the player simply absorbs the virus mass without exploding.
+                                // --- MODIFICATION END ---
                             }
                             // If player is already at max cells, they just gain the mass.
                         }
@@ -918,7 +955,7 @@ function getSafeSpawnPosition() {
             `Could not find a safe spawn position after ${maxAttempts} attempts.`,
         );
     }
-    position = { x: 2500, y: 2500 }; //uncomment this
+    //position = { x: 2500, y: 2500 }; //uncomment this
     return position;
 }
 
@@ -959,10 +996,52 @@ io.on("connection", (socket) => {
             targetX: startPosition.x,
             targetY: startPosition.y,
             nextCellId: 1,
+            // NEW: Add emote-related properties
+            lastEmoteTime: 0,
+            emote: null,
         };
         console.log(
             `Player ${data.nickname} (${socket.id}) joined with skin: ${data.skinUrl}.`,
         );
+        socket.emit("joined", { playerId: socket.id });
+    });
+
+    // *** MODIFICATION 3: Add new listener for playing emotes ***
+    socket.on("playEmote", ({ emoteId }) => {
+        const player = players[socket.id];
+        if (!player || player.cells.length === 0) return;
+
+        const now = Date.now();
+        // Cooldown check (5 seconds)
+        if (now - player.lastEmoteTime < 5000) {
+            return;
+        }
+
+        player.lastEmoteTime = now;
+
+        // Find the player's largest cell
+        let largestCell = player.cells.reduce((largest, current) => {
+            return current.mass > largest.mass ? current : largest;
+        }, player.cells[0]);
+
+        // Set the emote state (lasts for 3 seconds)
+        player.emote = {
+            emoteId: emoteId,
+            largestCellId: largestCell.id,
+        };
+        console.log(emoteId + " " + largestCell.id);
+        // Clear the emote after 3 seconds
+        setTimeout(() => {
+            // Make sure player and emote still exist and haven't been replaced
+            const currentPlayer = players[socket.id];
+            if (
+                currentPlayer &&
+                currentPlayer.emote &&
+                currentPlayer.emote.largestCellId === largestCell.id
+            ) {
+                currentPlayer.emote = null;
+            }
+        }, 3000);
     });
 
     // ... (All other socket event listeners like 'mouseMove', 'ejectMass', etc., are unchanged) ...
@@ -1002,6 +1081,7 @@ io.on("connection", (socket) => {
     socket.on("split", () => {
         const player = players[socket.id];
         if (!player) return;
+        const WALL_TOLERANCE = 5;
         const cellsToSplit = [...player.cells];
         for (const cell of cellsToSplit) {
             if (player.cells.length >= CONFIG.MAX_CELLS) break;
@@ -1011,14 +1091,38 @@ io.on("connection", (socket) => {
                 player.targetY - cell.y,
                 player.targetX - cell.x,
             );
+
+            // 1. Calculate the initial intended velocity
+            let newVx = Math.cos(angle) * CONFIG.SPLIT_SPEED;
+            let newVy = Math.sin(angle) * CONFIG.SPLIT_SPEED;
+
+            // 2. Check for wall collisions and reverse velocity if needed ("bounce")
+
+            // Check horizontal bounce (left and right walls)
+            if (
+                (cell.x <= WALL_TOLERANCE && newVx < 0) ||
+                (cell.x >= CONFIG.WORLD_WIDTH - WALL_TOLERANCE && newVx > 0)
+            ) {
+                newVx *= -0.7; // Reverse horizontal direction
+            }
+
+            // Check vertical bounce (top and bottom walls)
+            if (
+                (cell.y <= WALL_TOLERANCE && newVy < 0) ||
+                (cell.y >= CONFIG.WORLD_HEIGHT - WALL_TOLERANCE && newVy > 0)
+            ) {
+                newVy *= -0.7; // Reverse vertical direction
+            }
+
+            // 3. Create the new cell with the potentially adjusted velocity
             const newCell = {
                 id: player.nextCellId++,
                 x: cell.x,
                 y: cell.y,
                 mass: cell.mass,
                 radius: Math.sqrt(cell.mass),
-                vx: Math.cos(angle) * CONFIG.SPLIT_SPEED,
-                vy: Math.sin(angle) * CONFIG.SPLIT_SPEED,
+                vx: newVx, // Use the adjusted velocity
+                vy: newVy, // Use the adjusted velocity
                 mergeTime:
                     CONFIG.MERGE_TIME_BASE +
                     cell.mass * CONFIG.MERGE_TIME_PER_MASS,
